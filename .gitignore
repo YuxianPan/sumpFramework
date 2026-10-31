@@ -1,0 +1,13 @@
+# 构建产物
+*.exe
+bin/
+
+# 本地数据与密钥（秘密项默认落这里）
+data/
+*.db
+
+# 编辑器和系统杂项
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

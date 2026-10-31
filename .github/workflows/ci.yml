@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt 检查
+        shell: bash
+        run: |
+          out=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$out" ]; then
+            echo "以下文件需要 gofmt："
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: 测试
+        run: go test ./... -count=1 -timeout 300s
+
+      - name: 竞态检查
+        if: runner.os == 'Linux'
+        run: go test ./... -count=1 -race -timeout 600s
