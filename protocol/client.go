@@ -3,6 +3,7 @@ package protocol
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -72,6 +73,10 @@ func DialContextWithOptions(ctx context.Context, addr string, onEvent func(Envel
 }
 
 // Send 发送一条消息，不等待回复（事件、响应或长耗时请求）。
+//
+// 写失败一律归一化成 ErrConnClosed：对端先一步消失时，WriteMessage 抛的是 TCP 层
+// 报错（connection reset by peer / broken pipe），可它说的仍是「连接没了」。
+// 调用方只消判一种错误；原始错误保留在文本里，排障时不丢信息。
 func (c *Client) Send(env Envelope) error {
 	data, err := Marshal(env)
 	if err != nil {
@@ -81,9 +86,17 @@ func (c *Client) Send(env Envelope) error {
 	defer c.writeMu.Unlock()
 	if err := c.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 		c.close()
-		return err
+		return normalizeClosed(err)
 	}
 	return nil
+}
+
+// normalizeClosed 把底层写失败包成 ErrConnClosed（errors.Is 可达），原文附在后面。
+func normalizeClosed(err error) error {
+	if errors.Is(err, ErrConnClosed) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrConnClosed, err)
 }
 
 // Call 发送请求并等待同 id 的 response，或 ctx 超时 / 连接关闭。
