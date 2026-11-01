@@ -740,11 +740,15 @@ type ReportPayload struct {
 //
 // Model 非空时覆盖默认模型（"最小不思考"用非推理模型就填这里）；
 // MaxTokens 上限 4096（防止误填一个天文数字把账单打飞）。
+//
+// Context 是调用方自己查好的参考资料（知识库片段等），**逐条给、别自己拼格式**：
+// 编号与截断由服务统一做，谁调都是同一种拼法。空 = 与普通补全一字不差。
 type ThinkPayload struct {
-	System    string `msgpack:"system,omitempty"`
-	Prompt    string `msgpack:"prompt"`
-	Model     string `msgpack:"model,omitempty"`
-	MaxTokens int    `msgpack:"max_tokens,omitempty"`
+	System    string   `msgpack:"system,omitempty"`
+	Prompt    string   `msgpack:"prompt"`
+	Context   []string `msgpack:"context,omitempty"`
+	Model     string   `msgpack:"model,omitempty"`
+	MaxTokens int      `msgpack:"max_tokens,omitempty"`
 }
 
 // ThinkResult 是单步推理的结果。
