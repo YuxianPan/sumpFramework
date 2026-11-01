@@ -399,7 +399,7 @@ func TestThinkRejectsOverlongPrompt(t *testing.T) {
 // TestThinkUpstreamErrorHidesKey 覆盖上游错误：要可读，且绝不回显密钥。
 func TestThinkUpstreamErrorHidesKey(t *testing.T) {
 	fq, s, _ := setup(t, true)
-	fq.answer(http.StatusUnauthorized, `{"error":{"code":"invalid_api_key","message":"Incorrect API key provided."}}`)
+	fq.answer(http.StatusUnauthorized, `{"error":{"code":"invalid_api_key","message":"Incorrect API key provided: `+testKey+`."}}`)
 
 	rp := callAction(t, s, "think", protocol.ThinkPayload{Prompt: "你好"})
 	if rp.OK {
@@ -517,7 +517,7 @@ func TestUpstreamErrorHints(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		err := upstreamError(c.status, []byte(c.body))
+		err := upstreamError(c.status, []byte(c.body), testKey)
 		if err == nil {
 			t.Fatalf("%s: 应返回错误", c.name)
 		}

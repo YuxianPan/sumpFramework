@@ -75,10 +75,15 @@ type chatResponse struct {
 // think 发起一次补全：system 为空就不带 system 消息；maxTokens 由调用方夹好。
 // finish 是上游给的停止原因（"length" = 被 max_tokens 截断），供调用方记日志。
 func (c *chatClient) think(ctx context.Context, base, key, model, system, prompt string, maxTokens int) (string, string, error) {
-	if strings.TrimSpace(key) == "" {
+	// Key 从 flag、秘密文件或面板来的都可能带首尾空白/换行；空值判断用了
+	// TrimSpace，却把原串拼进 Authorization 的话，换行会直接让 net/http
+	// 拒绝请求（invalid header field value）。在入口统一归一化，后续脱敏
+	// 也使用同一份值，避免“判断一个值、发送另一个值”。
+	key = strings.TrimSpace(key)
+	if key == "" {
 		return "", "", errors.New("还没有千问 API Key：面板设置 llm.key，或启动时给 -llm-key")
 	}
-	if strings.TrimSpace(model) == "" {
+	if model = strings.TrimSpace(model); model == "" {
 		model = defaultModel
 	}
 
@@ -110,12 +115,12 @@ func (c *chatClient) think(ctx context.Context, base, key, model, system, prompt
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	raw, err := readUpstreamBody(resp.Body, maxBodyBytes)
 	if err != nil {
-		return "", "", fmt.Errorf("读上游响应失败: %w", err)
+		return "", "", fmt.Errorf("读上游响应失败（HTTP %d）: %w", resp.StatusCode, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", "", upstreamError(resp.StatusCode, raw)
+		return "", "", upstreamError(resp.StatusCode, raw, key)
 	}
 
 	var out chatResponse
@@ -123,7 +128,9 @@ func (c *chatClient) think(ctx context.Context, base, key, model, system, prompt
 		return "", "", fmt.Errorf("上游响应不是合法 JSON（HTTP %d）: %w", resp.StatusCode, err)
 	}
 	if out.Error != nil && out.Error.Message != "" {
-		return "", "", fmt.Errorf("千问返回错误（%s）: %s", out.Error.Code, out.Error.Message)
+		code := redactSecret(out.Error.Code, key)
+		detail := redactSecret(out.Error.Code+" / "+out.Error.Message, key)
+		return "", "", fmt.Errorf("千问返回错误（%s）: %s", code, detail)
 	}
 	if len(out.Choices) == 0 {
 		return "", "", errors.New("千问没有返回任何结果（choices 为空）")
@@ -137,8 +144,33 @@ func (c *chatClient) think(ctx context.Context, base, key, model, system, prompt
 	return text, out.Choices[0].FinishReason, nil
 }
 
-// upstreamError 把非 200 翻成人话。只带上游自己的 code/message，绝不回显钥匙。
-func upstreamError(status int, raw []byte) error {
+// readUpstreamBody 只读到上限 +1 字节：多出来的那一个字节用于区分
+// “恰好到上限”和“已经超限”。超限必须明确报错，不能把截断内容交给 JSON 解析后
+// 误报成“不是合法 JSON”，更不能静默接受一个刚好以完整 JSON 开头的超长响应。
+func readUpstreamBody(r io.Reader, limit int64) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, fmt.Errorf("上游响应超过 %d 字节上限", limit)
+	}
+	return raw, nil
+}
+
+// redactSecret 把上游错误文本中可能回显的密钥替换成占位符。
+// 空密钥不做替换，避免 strings.ReplaceAll 的边界行为。
+func redactSecret(text, secret string) string {
+	if secret == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, secret, "（已隐藏）")
+}
+
+// upstreamError 把非 200 翻成人话。只带上游自己的 code/message；万一上游把
+// 请求里的密钥回显进 code/message，也在这里统一脱敏——错误文本会穿过服务响应，
+// 不能假设上游永远不泄露。
+func upstreamError(status int, raw []byte, key string) error {
 	var out chatResponse
 	_ = json.Unmarshal(raw, &out) // 尽力而为：错误体不保证是 JSON
 
@@ -153,6 +185,7 @@ func upstreamError(status int, raw []byte) error {
 			detail = out.Error.Message
 		}
 	}
+	detail = redactSecret(detail, key)
 
 	hint := ""
 	switch {
